@@ -1,0 +1,223 @@
+package ui
+
+import "fmt"
+import "github.com/ethandedalus/single-decree-paxos/pkg/node"
+
+templ Page(s node.Snapshot) {
+	<html lang="en" class="dark">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ fmt.Sprintf("node %d — paxos", s.ID) }</title>
+			<link rel="stylesheet" href="/static/app.css"/>
+			<link rel="icon" href="data:,"/>
+		</head>
+		<body class="min-h-screen bg-slate-950 text-slate-200 antialiased">
+			<div class="mx-auto max-w-6xl px-6 py-8 space-y-6">
+				@header(s)
+				<div id="state">
+					@State(s)
+				</div>
+				@controls(s)
+				@faultPanel(s)
+				@logPanel()
+			</div>
+			<script src="/static/app.js" defer></script>
+		</body>
+	</html>
+}
+
+templ header(s node.Snapshot) {
+	<header class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-5">
+		<div class="flex items-center gap-4">
+			<div class="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-500/15 text-xl font-bold text-indigo-300 ring-1 ring-indigo-500/30">
+				{ fmt.Sprint(s.ID) }
+			</div>
+			<div>
+				<h1 class="text-xl font-semibold tracking-tight text-slate-100">
+					{ fmt.Sprintf("node %d", s.ID) }
+				</h1>
+				<p class="font-mono text-xs text-slate-500">{ s.ListenAddr }</p>
+			</div>
+		</div>
+		<div id="header-badges" class="flex items-center gap-2">
+			@Badges(s)
+		</div>
+	</header>
+}
+
+templ Badges(s node.Snapshot) {
+	if s.Alive {
+		<span class="rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-medium text-emerald-300 ring-1 ring-emerald-500/30">alive</span>
+	} else {
+		<span class="rounded-full bg-rose-500/15 px-3 py-1 text-xs font-medium text-rose-300 ring-1 ring-rose-500/30">down</span>
+	}
+	if s.Campaigning {
+		<span class="rounded-full bg-amber-500/15 px-3 py-1 text-xs font-medium text-amber-300 ring-1 ring-amber-500/30">campaigning</span>
+	}
+	if s.Chaos {
+		<span class="rounded-full bg-fuchsia-500/15 px-3 py-1 text-xs font-medium text-fuchsia-300 ring-1 ring-fuchsia-500/30">chaos</span>
+	}
+	if s.Faults.Isolated {
+		<span class="rounded-full bg-orange-500/15 px-3 py-1 text-xs font-medium text-orange-300 ring-1 ring-orange-500/30">isolated</span>
+	}
+}
+
+templ State(s node.Snapshot) {
+	<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+		@card("cluster", cardBody{
+			{"size", fmt.Sprint(s.ClusterSize)},
+			{"quorum", fmt.Sprint(s.Quorum)},
+			{"proposes", fmt.Sprint(s.Value)},
+		})
+		@card("proposer", cardBody{
+			{"round", fmt.Sprint(s.Round)},
+			{"campaigning", yesNo(s.Campaigning)},
+		})
+		@card("acceptor", cardBody{
+			{"promised", s.Acceptor.Promised.String()},
+			{"accepted", acceptedProposal(s)},
+			{"value", acceptedValue(s)},
+		})
+		@decisionCard(s)
+	</div>
+}
+
+type kv struct {
+	Key   string
+	Value string
+}
+
+type cardBody []kv
+
+templ card(title string, rows cardBody) {
+	<div class="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+		<h2 class="text-[11px] font-semibold uppercase tracking-widest text-slate-500">{ title }</h2>
+		<dl class="mt-3 space-y-1.5">
+			for _, row := range rows {
+				<div class="flex items-baseline justify-between gap-3">
+					<dt class="text-xs text-slate-500">{ row.Key }</dt>
+					<dd class="font-mono text-sm text-slate-200">{ row.Value }</dd>
+				</div>
+			}
+		</dl>
+	</div>
+}
+
+templ decisionCard(s node.Snapshot) {
+	if s.Decision.Learned {
+		<div class="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4">
+			<h2 class="text-[11px] font-semibold uppercase tracking-widest text-emerald-400">learned</h2>
+			<p class="mt-3 font-mono text-3xl font-bold text-emerald-300">{ fmt.Sprint(s.Decision.Value) }</p>
+			<p class="mt-1 font-mono text-xs text-emerald-500/80">{ s.Decision.Proposal.String() }</p>
+		</div>
+	} else {
+		<div class="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+			<h2 class="text-[11px] font-semibold uppercase tracking-widest text-slate-500">learned</h2>
+			<p class="mt-3 font-mono text-2xl font-bold text-slate-600">pending</p>
+		</div>
+	}
+}
+
+templ controls(s node.Snapshot) {
+	<section class="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+		<h2 class="text-[11px] font-semibold uppercase tracking-widest text-slate-500">lifecycle</h2>
+		<div id="controls-panel" class="mt-3 flex flex-wrap gap-2">
+			@ControlButtons(s)
+		</div>
+		<p class="mt-3 text-xs text-slate-600">
+			killing stops the gRPC server and releases the state file; reviving reloads the durable record, which is how a recovered promise survives.
+		</p>
+	</section>
+}
+
+templ ControlButtons(s node.Snapshot) {
+	<button data-action="/api/kill" class="act rounded-lg bg-rose-500/15 px-3 py-2 text-sm font-medium text-rose-300 ring-1 ring-rose-500/30 hover:bg-rose-500/25">kill</button>
+	<button data-action="/api/revive" class="act rounded-lg bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-300 ring-1 ring-emerald-500/30 hover:bg-emerald-500/25">revive</button>
+	<button data-action="/api/campaign" class="act rounded-lg bg-indigo-500/15 px-3 py-2 text-sm font-medium text-indigo-300 ring-1 ring-indigo-500/30 hover:bg-indigo-500/25">campaign now</button>
+	<button data-action="/api/chaos/toggle" class="act rounded-lg bg-fuchsia-500/15 px-3 py-2 text-sm font-medium text-fuchsia-300 ring-1 ring-fuchsia-500/30 hover:bg-fuchsia-500/25">
+		if s.Chaos {
+			stop chaos
+		} else {
+			random death
+		}
+	</button>
+	<button data-action="/api/reset" data-confirm="wipe durable acceptor state?" class="act rounded-lg bg-slate-800 px-3 py-2 text-sm font-medium text-slate-300 ring-1 ring-slate-700 hover:bg-slate-700">wipe state</button>
+}
+
+templ faultPanel(s node.Snapshot) {
+	<section class="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+		<h2 class="text-[11px] font-semibold uppercase tracking-widest text-slate-500">fault injection</h2>
+		<div class="mt-4 grid gap-5 md:grid-cols-2">
+			<div class="space-y-4">
+				@slider("drop-prepare", "drop prepare", s.Faults.DropPrepare)
+				@slider("drop-accept", "drop accept", s.Faults.DropAccept)
+				<div class="flex items-center gap-3">
+					<label class="w-28 text-xs text-slate-500" for="latency">latency ms</label>
+					<input id="latency-min" type="number" min="0" value={ fmt.Sprint(s.Faults.LatencyMin.Milliseconds()) } class="w-24 rounded-md border border-slate-700 bg-slate-950 px-2 py-1 font-mono text-sm text-slate-200"/>
+					<span class="text-slate-600">–</span>
+					<input id="latency-max" type="number" min="0" value={ fmt.Sprint(s.Faults.LatencyMax.Milliseconds()) } class="w-24 rounded-md border border-slate-700 bg-slate-950 px-2 py-1 font-mono text-sm text-slate-200"/>
+					<button id="latency-apply" class="rounded-md bg-slate-800 px-2 py-1 text-xs text-slate-300 ring-1 ring-slate-700 hover:bg-slate-700">set</button>
+				</div>
+				<label class="flex items-center gap-3 text-sm text-slate-300">
+					<input id="isolate" type="checkbox" checked?={ s.Faults.Isolated } class="h-4 w-4 rounded border-slate-700 bg-slate-950"/>
+					isolate from all peers
+				</label>
+			</div>
+			<div>
+				<h3 class="text-xs text-slate-500">peer links</h3>
+				<ul class="mt-2 space-y-1.5">
+					for _, peer := range s.Peers {
+						<li class="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2">
+							<div>
+								<span class="font-mono text-sm text-slate-200">{ fmt.Sprintf("node %d", peer.ID) }</span>
+								<span class="ml-2 font-mono text-xs text-slate-600">{ peer.Addr }</span>
+							</div>
+							<label class="flex items-center gap-2 text-xs text-slate-500">
+								<input type="checkbox" class="peer-block h-4 w-4 rounded border-slate-700 bg-slate-950" data-peer={ fmt.Sprint(peer.ID) } checked?={ peer.Blocked }/>
+								cut
+							</label>
+						</li>
+					}
+					if len(s.Peers) == 0 {
+						<li class="rounded-lg border border-dashed border-slate-800 px-3 py-4 text-center text-xs text-slate-600">no peers configured</li>
+					}
+				</ul>
+			</div>
+		</div>
+	</section>
+}
+
+templ slider(id string, label string, value float64) {
+	<div class="flex items-center gap-3">
+		<label class="w-28 text-xs text-slate-500" for={ id }>{ label }</label>
+		<input
+			id={ id }
+			type="range"
+			min="0"
+			max="100"
+			value={ fmt.Sprint(int(value * 100)) }
+			class="drop h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-slate-800 accent-indigo-400"
+		/>
+		<output id={ id + "-out" } class="w-12 text-right font-mono text-sm text-slate-300">{ fmt.Sprintf("%d%%", int(value*100)) }</output>
+	</div>
+}
+
+templ logPanel() {
+	<section class="rounded-xl border border-slate-800 bg-slate-900/50">
+		<div class="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+			<h2 class="text-[11px] font-semibold uppercase tracking-widest text-slate-500">protocol log</h2>
+			<button id="clear-log" class="text-xs text-slate-500 hover:text-slate-300">clear</button>
+		</div>
+		<div id="log" class="max-h-96 divide-y divide-slate-800/70 overflow-y-auto font-mono text-xs"></div>
+	</section>
+}
+
+templ Event(level, ts, msg, fields string) {
+	<div class={ "flex gap-3 px-4 py-1.5 " + levelBg(level) }>
+		<span class="shrink-0 text-slate-600">{ ts }</span>
+		<span class={ "w-10 shrink-0 font-semibold " + levelColor(level) }>{ level }</span>
+		<span class="shrink-0 text-slate-200">{ msg }</span>
+		<span class="truncate text-slate-500">{ fields }</span>
+	</div>
+}

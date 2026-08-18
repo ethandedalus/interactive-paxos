@@ -1,0 +1,123 @@
+name: paxos
+
+x-node-env: &node-env
+  PAXOS_LISTEN: 0.0.0.0:9000
+  PAXOS_UI_LISTEN: 0.0.0.0:8090
+  PAXOS_DATA_DIR: /data
+  PAXOS_LOG_FORMAT: ${PAXOS_LOG_FORMAT:-json}
+  PAXOS_LOG_LEVEL: ${PAXOS_LOG_LEVEL:-info}
+
+x-node: &node
+  build:
+    context: .
+    args:
+      CMD: node
+  image: paxos-node:${PAXOS_TAG:-latest}
+  restart: ${PAXOS_RESTART:-unless-stopped}
+  stop_grace_period: 3s
+  networks:
+    - paxos
+  command: ${PAXOS_ARGS:---campaign-delay 1s --campaign-jitter 2s}
+
+services:
+  node1:
+    <<: *node
+    container_name: paxos-node1
+    environment:
+      <<: *node-env
+      PAXOS_NODE_ID: 1
+      PAXOS_PEERS: 2@node2:9000,3@node3:9000,4@node4:9000,5@node5:9000
+    ports:
+      - "${NODE1_UI_PORT:-8091}:8090"
+      - "${NODE1_GRPC_PORT:-9001}:9000"
+    volumes:
+      - node1-data:/data
+
+  node2:
+    <<: *node
+    container_name: paxos-node2
+    environment:
+      <<: *node-env
+      PAXOS_NODE_ID: 2
+      PAXOS_PEERS: 1@node1:9000,3@node3:9000,4@node4:9000,5@node5:9000
+    ports:
+      - "${NODE2_UI_PORT:-8092}:8090"
+      - "${NODE2_GRPC_PORT:-9002}:9000"
+    volumes:
+      - node2-data:/data
+
+  node3:
+    <<: *node
+    container_name: paxos-node3
+    environment:
+      <<: *node-env
+      PAXOS_NODE_ID: 3
+      PAXOS_PEERS: 1@node1:9000,2@node2:9000,4@node4:9000,5@node5:9000
+    ports:
+      - "${NODE3_UI_PORT:-8093}:8090"
+      - "${NODE3_GRPC_PORT:-9003}:9000"
+    volumes:
+      - node3-data:/data
+
+  node4:
+    <<: *node
+    container_name: paxos-node4
+    environment:
+      <<: *node-env
+      PAXOS_NODE_ID: 4
+      PAXOS_PEERS: 1@node1:9000,2@node2:9000,3@node3:9000,5@node5:9000
+    ports:
+      - "${NODE4_UI_PORT:-8094}:8090"
+      - "${NODE4_GRPC_PORT:-9004}:9000"
+    volumes:
+      - node4-data:/data
+
+  node5:
+    <<: *node
+    container_name: paxos-node5
+    environment:
+      <<: *node-env
+      PAXOS_NODE_ID: 5
+      PAXOS_PEERS: 1@node1:9000,2@node2:9000,3@node3:9000,4@node4:9000
+    ports:
+      - "${NODE5_UI_PORT:-8095}:8090"
+      - "${NODE5_GRPC_PORT:-9005}:9000"
+    volumes:
+      - node5-data:/data
+
+  console:
+    build:
+      context: .
+      args:
+        CMD: console
+    image: paxos-console:${PAXOS_TAG:-latest}
+    container_name: paxos-console
+    restart: ${PAXOS_RESTART:-unless-stopped}
+    stop_grace_period: 3s
+    networks:
+      - paxos
+    environment:
+      PAXOS_CONSOLE_LISTEN: 0.0.0.0:8080
+      PAXOS_CONSOLE_NODES: ${PAXOS_CONSOLE_NODES:-1@node1:8090,2@node2:8090,3@node3:8090,4@node4:8090,5@node5:8090}
+      PAXOS_CONSOLE_PUBLIC: ${PAXOS_CONSOLE_PUBLIC:-1@${PUBLIC_HOST:-localhost}:${NODE1_UI_PORT:-8091},2@${PUBLIC_HOST:-localhost}:${NODE2_UI_PORT:-8092},3@${PUBLIC_HOST:-localhost}:${NODE3_UI_PORT:-8093},4@${PUBLIC_HOST:-localhost}:${NODE4_UI_PORT:-8094},5@${PUBLIC_HOST:-localhost}:${NODE5_UI_PORT:-8095}}
+      PAXOS_LOG_FORMAT: ${PAXOS_LOG_FORMAT:-json}
+      PAXOS_LOG_LEVEL: ${PAXOS_LOG_LEVEL:-info}
+    ports:
+      - "${CONSOLE_PORT:-8080}:8080"
+    depends_on:
+      - node1
+      - node2
+      - node3
+      - node4
+      - node5
+
+networks:
+  paxos:
+    driver: bridge
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:
+  node4-data:
+  node5-data:

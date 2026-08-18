@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package paxos.v1;
+
+option go_package = "github.com/ethandedalus/single-decree-paxos/pkg/paxosv1;paxosv1";
+
+message ProposalNumber {
+  int64 round = 1;
+  int64 node_id = 2;
+}
+
+message PrepareRequest {
+  ProposalNumber proposal = 1;
+  int64 proposer_id = 2;
+}
+
+message PrepareResponse {
+  bool promised = 1;
+  ProposalNumber highest_promised = 2;
+  ProposalNumber accepted_proposal = 3;
+  uint64 accepted_value = 4;
+  bool has_accepted = 5;
+  int64 acceptor_id = 6;
+}
+
+message AcceptRequest {
+  ProposalNumber proposal = 1;
+  uint64 value = 2;
+  int64 proposer_id = 3;
+}
+
+message AcceptResponse {
+  bool accepted = 1;
+  ProposalNumber highest_promised = 2;
+  int64 acceptor_id = 3;
+}
+
+service Paxos {
+  rpc Prepare(PrepareRequest) returns (PrepareResponse);
+  rpc Accept(AcceptRequest) returns (AcceptResponse);
+}

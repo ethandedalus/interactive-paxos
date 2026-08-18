@@ -1,0 +1,197 @@
+package console
+
+import "fmt"
+
+templ ConsolePage(cluster *Cluster, status ClusterStatus, scenarios []Scenario) {
+	<html lang="en" class="dark">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>paxos console</title>
+			<link rel="stylesheet" href="/static/app.css"/>
+			<link rel="icon" href="data:,"/>
+		</head>
+		<body class="min-h-screen bg-slate-950 text-slate-200 antialiased">
+			<div class="mx-auto max-w-7xl px-6 py-8 space-y-6">
+				<header class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-5">
+					<div>
+						<h1 class="text-xl font-semibold tracking-tight text-slate-100">paxos console</h1>
+						<p class="text-xs text-slate-500">
+							{ fmt.Sprintf("%d nodes, quorum %d", cluster.Size(), cluster.Quorum()) }
+						</p>
+					</div>
+					<div id="summary">
+						@Summary(cluster, status, "", false)
+					</div>
+				</header>
+				<section>
+					<div class="mb-3 flex flex-wrap gap-2">
+						<button data-cluster="reset" class="cact rounded-lg bg-amber-500/15 px-3 py-2 text-sm font-medium text-amber-300 ring-1 ring-amber-500/30 hover:bg-amber-500/25" data-confirm="wipe durable state on every node?">clear all &amp; restart</button>
+						<button data-cluster="campaign" class="cact rounded-lg bg-indigo-500/15 px-3 py-2 text-sm font-medium text-indigo-300 ring-1 ring-indigo-500/30 hover:bg-indigo-500/25">campaign all</button>
+						<button data-cluster="revive" class="cact rounded-lg bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-300 ring-1 ring-emerald-500/30 hover:bg-emerald-500/25">revive all</button>
+						<button data-cluster="kill" class="cact rounded-lg bg-rose-500/15 px-3 py-2 text-sm font-medium text-rose-300 ring-1 ring-rose-500/30 hover:bg-rose-500/25" data-confirm="kill every node?">kill all</button>
+						<button data-cluster="heal" class="cact rounded-lg bg-slate-800 px-3 py-2 text-sm font-medium text-slate-300 ring-1 ring-slate-700 hover:bg-slate-700">heal faults</button>
+					</div>
+					<div id="grid">
+						@NodeGrid(status)
+					</div>
+				</section>
+				<div class="grid gap-6 lg:grid-cols-[380px_1fr]">
+					@scenarioPanel(scenarios)
+					@runPanel(cluster)
+				</div>
+			</div>
+			<script src="/static/console.js" defer></script>
+		</body>
+	</html>
+}
+
+templ Summary(cluster *Cluster, status ClusterStatus, running string, isRunning bool) {
+	<div class="flex flex-wrap items-center gap-2">
+		if isRunning {
+			<span class="rounded-full bg-indigo-500/15 px-3 py-1 text-xs font-medium text-indigo-300 ring-1 ring-indigo-500/30">
+				{ "running: " + running }
+			</span>
+		}
+		<span class="rounded-full bg-slate-800 px-3 py-1 text-xs font-medium text-slate-300 ring-1 ring-slate-700">
+			{ fmt.Sprintf("%d/%d alive", status.Alive, cluster.Size()) }
+		</span>
+		<span class="rounded-full bg-slate-800 px-3 py-1 text-xs font-medium text-slate-300 ring-1 ring-slate-700">
+			{ fmt.Sprintf("%d learned", status.Learned) }
+		</span>
+		if status.Disagreement {
+			<span class="rounded-full bg-rose-500/20 px-3 py-1 text-xs font-bold text-rose-300 ring-1 ring-rose-500/40">
+				{ fmt.Sprintf("DISAGREEMENT %v", status.Values) }
+			</span>
+		} else if status.HasSettled {
+			<span class="rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-medium text-emerald-300 ring-1 ring-emerald-500/30">
+				{ fmt.Sprintf("agreed on %d", status.SettledValue) }
+			</span>
+		} else {
+			<span class="rounded-full bg-slate-800 px-3 py-1 text-xs font-medium text-slate-500 ring-1 ring-slate-700">no decree yet</span>
+		}
+	</div>
+}
+
+templ NodeGrid(status ClusterStatus) {
+	<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+		for _, n := range status.Nodes {
+			<div class={ "rounded-xl border p-3 " + nodeCardClass(n) }>
+				<div class="flex items-center justify-between">
+					<a href={ templ.SafeURL(n.URL) } target="_blank" class="font-mono text-sm font-semibold text-slate-100 hover:text-indigo-300">
+						{ fmt.Sprintf("node %d", n.ID) }
+					</a>
+					<span class={ "text-[10px] font-semibold uppercase " + nodeStateColor(n) }>{ nodeStateLabel(n) }</span>
+				</div>
+				if n.Reachable {
+					<dl class="mt-2 space-y-1 text-xs">
+						<div class="flex justify-between">
+							<dt class="text-slate-500">round</dt>
+							<dd class="font-mono text-slate-300">{ fmt.Sprint(n.Snapshot.Round) }</dd>
+						</div>
+						<div class="flex justify-between">
+							<dt class="text-slate-500">promised</dt>
+							<dd class="font-mono text-slate-300">{ n.Snapshot.Acceptor.Promised.String() }</dd>
+						</div>
+						<div class="flex justify-between">
+							<dt class="text-slate-500">learned</dt>
+							<dd class="font-mono font-semibold text-slate-100">{ learnedLabel(n) }</dd>
+						</div>
+					</dl>
+					if faultsActive(n.Snapshot) {
+						<p class="mt-2 truncate text-[10px] text-amber-400">{ faultSummary(n.Snapshot) }</p>
+					}
+				} else {
+					<p class="mt-2 truncate text-[10px] text-rose-400">unreachable</p>
+				}
+			</div>
+		}
+	</div>
+}
+
+templ scenarioPanel(scenarios []Scenario) {
+	<section class="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+		<h2 class="text-[11px] font-semibold uppercase tracking-widest text-slate-500">simulation</h2>
+		<select id="scenario" class="mt-3 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200">
+			for _, s := range scenarios {
+				<option value={ s.Name }>{ s.Title }</option>
+			}
+		</select>
+		for _, s := range scenarios {
+			<div class="scenario-params mt-4 space-y-3" data-scenario={ s.Name } hidden?={ true }>
+				<p class="text-xs leading-relaxed text-slate-500">{ s.Summary }</p>
+				for _, p := range s.Params {
+					@paramField(s.Name, p)
+				}
+			</div>
+		}
+		<div class="mt-4 flex gap-2">
+			<button id="run" class="flex-1 rounded-lg bg-indigo-500/20 px-3 py-2 text-sm font-semibold text-indigo-200 ring-1 ring-indigo-500/40 hover:bg-indigo-500/30">run simulation</button>
+			<button id="stop" class="rounded-lg bg-slate-800 px-3 py-2 text-sm font-medium text-slate-300 ring-1 ring-slate-700 hover:bg-slate-700">stop</button>
+		</div>
+	</section>
+}
+
+templ paramField(scenario string, p Param) {
+	<div class="flex items-center justify-between gap-3">
+		<label class="text-xs text-slate-400" for={ scenario + "-" + p.Name }>
+			{ p.Label }
+			if p.Help != "" {
+				<span class="block text-[10px] text-slate-600">{ p.Help }</span>
+			}
+		</label>
+		if p.Kind == ParamBool {
+			<input
+				type="checkbox"
+				id={ scenario + "-" + p.Name }
+				data-param={ p.Name }
+				checked?={ p.Default == "true" }
+				class="param h-4 w-4 shrink-0 rounded border-slate-700 bg-slate-950"
+			/>
+		} else {
+			<input
+				type="number"
+				id={ scenario + "-" + p.Name }
+				data-param={ p.Name }
+				value={ p.Default }
+				min={ p.Min }
+				max={ p.Max }
+				step={ paramStep(p) }
+				class="param w-24 shrink-0 rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-right font-mono text-sm text-slate-200"
+			/>
+		}
+	</div>
+}
+
+templ runPanel(cluster *Cluster) {
+	<section class="rounded-xl border border-slate-800 bg-slate-900/50">
+		<div class="flex items-center justify-between gap-3 border-b border-slate-800 px-4 py-2">
+			<div class="flex flex-wrap items-center gap-1">
+				<button data-tab="run" class="logtab rounded-md px-2.5 py-1.5 text-xs font-medium">run log</button>
+				for _, id := range cluster.IDs() {
+					<button data-tab={ fmt.Sprint(id) } class="logtab rounded-md px-2.5 py-1.5 text-xs font-medium">
+						{ fmt.Sprintf("node %d", id) }
+					</button>
+				}
+			</div>
+			<button id="clear-steps" class="shrink-0 text-xs text-slate-500 hover:text-slate-300">clear all</button>
+		</div>
+		<div id="steps" data-pane="run" class="logpane max-h-[32rem] divide-y divide-slate-800/70 overflow-y-auto font-mono text-xs"></div>
+		for _, id := range cluster.IDs() {
+			<div
+				id={ fmt.Sprintf("nodelog-%d", id) }
+				data-pane={ fmt.Sprint(id) }
+				class="logpane max-h-[32rem] divide-y divide-slate-800/70 overflow-y-auto font-mono text-xs"
+				hidden?={ true }
+			></div>
+		}
+	</section>
+}
+
+templ StepRow(step Step) {
+	<div class={ "flex gap-3 px-4 py-1.5 " + stepBg(step.Kind) }>
+		<span class="shrink-0 text-slate-600">{ step.At.Format("15:04:05") }</span>
+		<span class={ "w-16 shrink-0 font-semibold uppercase " + stepColor(step.Kind) }>{ string(step.Kind) }</span>
+		<span class="text-slate-300">{ step.Message }</span>
+	</div>
+}

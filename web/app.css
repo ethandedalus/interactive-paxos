@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+@source "../pkg/ui/**/*.templ";
+@source "../pkg/ui/*.go";
+@source "../pkg/ui/static/app.js";
+@source "../pkg/console/**/*.templ";
+@source "../pkg/console/*.go";
+@source "../pkg/console/static/console.js";
+
+@theme {
+	--font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+}

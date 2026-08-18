@@ -1,0 +1,9 @@
+.git
+.gitignore
+bin
+tmp
+data
+web
+Dockerfile
+compose.yaml
+*.md
