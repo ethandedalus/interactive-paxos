@@ -1,4 +1,3 @@
-// Package transport
 package transport
 
 import (

@@ -8,14 +8,22 @@ import (
 	"sync"
 )
 
+// AcceptorState represents the durable state of an acceptor through its lifecycle.
 type AcceptorState struct {
-	Promised         ProposalNumber
+	// Promised is the highest proposal number this acceptor has promised to (explicitly in prepare, implicitly in accept)
+	Promised ProposalNumber
+	// AcceptedProposal is the proposal number of the proposal this acceptor has most recently accepted
 	AcceptedProposal ProposalNumber
-	AcceptedValue    uint64
-	HasAccepted      bool
+	// AcceptedValue is the value that this acceptor has accepted
+	AcceptedValue uint64
+	// HasAccepted distinguishes whether [AcceptorState.AcceptedValue] is actually set
+	// (in the case that it is its zero value)
+	HasAccepted bool
 }
 
+// Acceptor is a Paxos acceptor
 type Acceptor struct {
+	// id is the unique identifier of this acceptor
 	id    int
 	log   *slog.Logger
 	store Store
@@ -24,6 +32,7 @@ type Acceptor struct {
 	state AcceptorState
 }
 
+// NewAcceptor creates a new acceptor and uses the passed in store to load durable state.
 func NewAcceptor(ctx context.Context, id int, store Store, log *slog.Logger) (*Acceptor, error) {
 	if log == nil {
 		log = slog.Default()
@@ -67,6 +76,7 @@ func (a *Acceptor) State() AcceptorState {
 	return a.state
 }
 
+// Prepare handles a prepare(n) request from a proposer
 func (a *Acceptor) Prepare(ctx context.Context, req PrepareRequest) (PrepareResponse, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -79,6 +89,7 @@ func (a *Acceptor) Prepare(ctx context.Context, req PrepareRequest) (PrepareResp
 		AcceptorID:       a.id,
 	}
 
+	// proposal number was zero or lower than the proposal number we've most recently promised to
 	if !req.Proposal.AtLeast(a.state.Promised) || req.Proposal.IsZero() {
 		a.log.DebugContext(
 			ctx, "rejected prepare",
@@ -92,6 +103,7 @@ func (a *Acceptor) Prepare(ctx context.Context, req PrepareRequest) (PrepareResp
 	next := a.state
 	next.Promised = req.Proposal
 
+	// Durably persist state with an updated highest proposal number. If an error occurs, this prepare(n) reports a failure.
 	if err := a.store.Save(ctx, next); err != nil {
 		a.log.ErrorContext(
 			ctx, "failed to persist promise",
@@ -102,6 +114,8 @@ func (a *Acceptor) Prepare(ctx context.Context, req PrepareRequest) (PrepareResp
 		return PrepareResponse{}, fmt.Errorf("persist promise: %w", err)
 	}
 
+	// update our in memory state to the same state we just persisted and update our response parameters to indicate we have promised
+	// to the proposer we are responding to and set the response's proposal number to the request's
 	a.state = next
 	resp.Promised = true
 	resp.HighestPromised = req.Proposal
@@ -114,6 +128,7 @@ func (a *Acceptor) Prepare(ctx context.Context, req PrepareRequest) (PrepareResp
 	return resp, nil
 }
 
+// Accept handles an accept(n, v) request from a proposer
 func (a *Acceptor) Accept(ctx context.Context, req AcceptRequest) (AcceptResponse, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -123,6 +138,8 @@ func (a *Acceptor) Accept(ctx context.Context, req AcceptRequest) (AcceptRespons
 		AcceptorID:      a.id,
 	}
 
+	// If the proposal number provided is zero or is not at least the most recent proposal number we've promised to, we reject this
+	// accept(n, v) request
 	if !req.Proposal.AtLeast(a.state.Promised) || req.Proposal.IsZero() {
 		a.log.DebugContext(
 			ctx, "rejected accept",
@@ -141,6 +158,9 @@ func (a *Acceptor) Accept(ctx context.Context, req AcceptRequest) (AcceptRespons
 		HasAccepted:      true,
 	}
 
+	// Durably persist the next acceptor state. At this point we have accepted the request we received. Because Paxos assumes a
+	// non-Byzantine system, we trust that the proposer has faithfully followed the protocol. If we fail to persist the state, then
+	// we fail and do not continue.
 	if err := a.store.Save(ctx, next); err != nil {
 		a.log.ErrorContext(
 			ctx, "failed to persist acceptance",
@@ -152,6 +172,8 @@ func (a *Acceptor) Accept(ctx context.Context, req AcceptRequest) (AcceptRespons
 		return AcceptResponse{}, fmt.Errorf("persist acceptance: %w", err)
 	}
 
+	// Update our in memory state and the response parameters to indicate that we have accepted a response and that the highest proposal
+	// number we've seen is the one from the current request.
 	a.state = next
 	resp.Accepted = true
 	resp.HighestPromised = req.Proposal

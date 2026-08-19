@@ -88,21 +88,61 @@ func TestRoundTimeoutIsNotAnAbort(t *testing.T) {
 	}
 }
 
-func TestChosenValueIsNotReportedAsAborted(t *testing.T) {
-	peers, _ := acceptors(t, 1, 2, 3)
-	p := NewProposer(1, 1, peers, testConfig(), discardLogger())
+type cancellingPeer struct {
+	id       int
+	accepted bool
+	cancel   func()
+}
 
+func (p *cancellingPeer) ID() int { return p.id }
+
+func (p *cancellingPeer) Prepare(context.Context, PrepareRequest) (PrepareResponse, error) {
+	return PrepareResponse{Promised: true, AcceptorID: p.id}, nil
+}
+
+func (p *cancellingPeer) Accept(context.Context, AcceptRequest) (AcceptResponse, error) {
+	if p.cancel != nil {
+		p.cancel()
+	}
+	return AcceptResponse{Accepted: p.accepted, AcceptorID: p.id}, nil
+}
+
+func TestQuorumOfAcceptsBeatsACancellationRacingIt(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	attempt := p.Propose(ctx)
-	if attempt.Outcome != OutcomeChosen {
-		t.Fatalf("outcome = %v, want chosen", attempt.Outcome)
+	peers := []Peer{
+		&cancellingPeer{id: 1, accepted: true},
+		&cancellingPeer{id: 2, accepted: true, cancel: cancel},
+		&cancellingPeer{id: 3, accepted: true},
 	}
 
-	cancel()
+	p := NewProposer(1, 1, peers, testConfig(), discardLogger())
+
+	attempt := p.Propose(ctx)
 	if attempt.Outcome != OutcomeChosen {
-		t.Fatal("a value that reached quorum stays chosen")
+		t.Fatalf("outcome = %v, want chosen: a quorum accepted before the caller cancelled, and acceptors do not forget", attempt.Outcome)
+	}
+	if ctx.Err() == nil {
+		t.Fatal("the test did not actually cancel the caller context")
+	}
+}
+
+func TestCancellationDuringAFailingAcceptPhaseIsAnAbort(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	peers := []Peer{
+		&cancellingPeer{id: 1, accepted: true},
+		&cancellingPeer{id: 2, accepted: false, cancel: cancel},
+		&cancellingPeer{id: 3, accepted: false},
+	}
+
+	p := NewProposer(1, 1, peers, testConfig(), discardLogger())
+
+	attempt := p.Propose(ctx)
+	if attempt.Outcome != OutcomeAborted {
+		t.Fatalf("outcome = %v, want aborted: no quorum was reached and the caller had gone", attempt.Outcome)
 	}
 }
 
@@ -143,5 +183,49 @@ func TestCampaignStopsImmediatelyOnAbort(t *testing.T) {
 func TestOutcomeAbortedString(t *testing.T) {
 	if got := OutcomeAborted.String(); got != "aborted" {
 		t.Fatalf("OutcomeAborted.String() = %q, want %q", got, "aborted")
+	}
+}
+
+func TestAbortReportsTheCallersCauseNotTheRoundTimeout(t *testing.T) {
+	peers := []Peer{
+		&blockingPeer{id: 1, release: make(chan struct{})},
+		&blockingPeer{id: 2, release: make(chan struct{})},
+		&blockingPeer{id: 3, release: make(chan struct{})},
+	}
+
+	cfg := testConfig()
+	cfg.RoundTimeout = 10 * time.Second
+	p := NewProposer(1, 1, peers, cfg, discardLogger())
+
+	sentinel := errors.New("operator pulled the plug")
+	ctx, cancel := context.WithCancelCause(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel(sentinel)
+	}()
+
+	attempt := p.Propose(ctx)
+	if attempt.Outcome != OutcomeAborted {
+		t.Fatalf("outcome = %v, want aborted", attempt.Outcome)
+	}
+}
+
+func TestCallerDeadlineShorterThanRoundTimeoutIsAnAbort(t *testing.T) {
+	peers := []Peer{
+		&blockingPeer{id: 1, release: make(chan struct{})},
+		&blockingPeer{id: 2, release: make(chan struct{})},
+		&blockingPeer{id: 3, release: make(chan struct{})},
+	}
+
+	cfg := testConfig()
+	cfg.RoundTimeout = 10 * time.Second
+	p := NewProposer(1, 1, peers, cfg, discardLogger())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+
+	attempt := p.Propose(ctx)
+	if attempt.Outcome != OutcomeAborted {
+		t.Fatalf("outcome = %v, want aborted: the caller's deadline fired, not the round's", attempt.Outcome)
 	}
 }

@@ -52,3 +52,11 @@ func (p ProposalNumber) LogValue() slog.Value {
 		slog.Int("node_id", p.NodeID),
 	)
 }
+
+// max returns whichever proposal number is greater
+func max(a, b ProposalNumber) ProposalNumber {
+	if a.Less(b) {
+		return b
+	}
+	return a
+}
